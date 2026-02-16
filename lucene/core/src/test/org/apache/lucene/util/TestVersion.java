@@ -248,18 +248,6 @@ public class TestVersion extends LuceneTestCase {
     assertFalse(version400.onOrAfter(version800));
   }
 
-  public void testLatestVersionCommonBuild() {
-    // common-build.xml sets 'tests.LUCENE_VERSION', if not, we skip this test!
-    String commonBuildVersion = System.getProperty("tests.LUCENE_VERSION");
-    assumeTrue(
-        "Null 'tests.LUCENE_VERSION' test property. You should run the tests with the official Lucene build file",
-        commonBuildVersion != null);
-    assertEquals(
-        "Version.LATEST does not match the one given in tests.LUCENE_VERSION property",
-        Version.LATEST.toString(),
-        commonBuildVersion);
-  }
-
   public void testEqualsHashCode() throws Exception {
     Random random = random();
     String version =

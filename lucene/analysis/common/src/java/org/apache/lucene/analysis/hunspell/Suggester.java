@@ -107,7 +107,7 @@ public class Suggester {
    */
   public List<String> suggestNoTimeout(String word, Runnable checkCanceled) {
     LinkedHashSet<Suggestion> suggestions = new LinkedHashSet<>();
-    return suggest(word, suggestions, handleCustomTimeoutException(checkCanceled, suggestions));
+    return suggest(word, false, suggestions, handleCustomTimeoutException(checkCanceled, suggestions));
   }
 
   private Runnable handleCustomTimeoutException(
@@ -137,13 +137,19 @@ public class Suggester {
    */
   public List<String> suggestWithTimeout(String word, long timeLimitMs, Runnable checkCanceled)
       throws SuggestionTimeoutException {
+    return suggestWithTimeout(word, false, timeLimitMs, checkCanceled);
+  }
+
+  public List<String> suggestWithTimeout(
+      String word, boolean forkRoot, long timeLimitMs, Runnable checkCanceled)
+      throws SuggestionTimeoutException {
     LinkedHashSet<Suggestion> suggestions = new LinkedHashSet<>();
     Runnable checkTime = checkTimeLimit(word, suggestions, timeLimitMs, checkCanceled);
-    return suggest(word, suggestions, handleCustomTimeoutException(checkTime, suggestions));
+    return suggest(word, forkRoot, suggestions, handleCustomTimeoutException(checkTime, suggestions));
   }
 
   private List<String> suggest(
-      String word, LinkedHashSet<Suggestion> suggestions, Runnable checkCanceled)
+      String word, boolean forkRoot, LinkedHashSet<Suggestion> suggestions, Runnable checkCanceled)
       throws SuggestionTimeoutException {
     checkCanceled.run();
     if (word.length() >= 100) return Collections.emptyList();
@@ -151,6 +157,9 @@ public class Suggester {
     if (dictionary.needsInputCleaning(word)) {
       word = dictionary.cleanInput(word, new StringBuilder()).toString();
     }
+
+    WordCase wordCase = WordCase.caseOf(word);
+    boolean actualForkRoot = forkRoot && wordCase == WordCase.LOWER;
 
     Hunspell suggestionSpeller =
         new Hunspell(dictionary, NO_TIMEOUT, checkCanceled) {
@@ -168,6 +177,34 @@ public class Suggester {
           @Override
           Root<CharsRef> findStem(
               char[] chars, int offset, int length, WordCase originalCase, WordContext context) {
+            if (actualForkRoot && context == WordContext.SIMPLE_WORD) {
+              if (originalCase == WordCase.LOWER) {
+                Root<CharsRef> stem = super.findStem(chars, offset, length, originalCase, context);
+                if (stem != null) return stem;
+
+                String title = dictionary.toTitleCase(new String(chars, offset, length));
+                return super.findStem(
+                    title.toCharArray(), 0, title.length(), WordCase.TITLE, context);
+              }
+              if (originalCase == WordCase.TITLE) {
+                Root<CharsRef> stem = super.findStem(chars, offset, length, originalCase, context);
+                if (stem != null) return stem;
+
+                String lower = dictionary.toLowerCase(new String(chars, offset, length));
+                return super.findStem(
+                    lower.toCharArray(), 0, lower.length(), WordCase.LOWER, context);
+              }
+            }
+
+            if (actualForkRoot && originalCase == WordCase.LOWER) {
+              Root<CharsRef> stem = super.findStem(chars, offset, length, originalCase, context);
+              if (stem != null) return stem;
+
+              String title = dictionary.toTitleCase(new String(chars, offset, length));
+              return super.findStem(
+                  title.toCharArray(), 0, title.length(), WordCase.TITLE, context);
+            }
+
             if (context == COMPOUND_BEGIN && originalCase == null) {
               return compoundCache
                   .computeIfAbsent(
@@ -180,7 +217,6 @@ public class Suggester {
           }
         };
 
-    WordCase wordCase = WordCase.caseOf(word);
     if (dictionary.forceUCase != FLAG_UNSET && wordCase == WordCase.LOWER) {
       String title = dictionary.toTitleCase(word);
       if (suggestionSpeller.spell(title)) {
@@ -190,12 +226,18 @@ public class Suggester {
 
     boolean hasGoodSuggestions =
         new ModifyingSuggester(
-                suggestionSpeller, suggestions, word, wordCase, fragmentChecker, proceedPastRep)
+                suggestionSpeller,
+                suggestions,
+                word,
+                wordCase,
+                fragmentChecker,
+                proceedPastRep,
+                actualForkRoot)
             .suggest();
 
     if (!hasGoodSuggestions && dictionary.maxNGramSuggestions > 0) {
       List<String> generated =
-          new GeneratingSuggester(suggestionSpeller, suggestibleCache)
+          new GeneratingSuggester(suggestionSpeller, suggestibleCache, actualForkRoot)
               .suggest(dictionary.toLowerCase(word), wordCase, suggestions);
       for (String raw : generated) {
         suggestions.add(new Suggestion(raw, word, wordCase, suggestionSpeller));
@@ -203,7 +245,7 @@ public class Suggester {
     }
 
     if (word.contains("-") && suggestions.stream().noneMatch(s -> s.raw.contains("-"))) {
-      for (String raw : modifyChunksBetweenDashes(word, suggestionSpeller, checkCanceled)) {
+      for (String raw : modifyChunksBetweenDashes(word, actualForkRoot, suggestionSpeller, checkCanceled)) {
         suggestions.add(new Suggestion(raw, word, wordCase, suggestionSpeller));
       }
     }
@@ -239,7 +281,7 @@ public class Suggester {
   }
 
   private List<String> modifyChunksBetweenDashes(
-      String word, Hunspell speller, Runnable checkCanceled) {
+      String word, boolean forkRoot, Hunspell speller, Runnable checkCanceled) {
     List<String> result = new ArrayList<>();
     int chunkStart = 0;
     while (chunkStart < word.length()) {
@@ -251,7 +293,7 @@ public class Suggester {
       if (chunkEnd > chunkStart) {
         String chunk = word.substring(chunkStart, chunkEnd);
         if (!speller.spell(chunk)) {
-          for (String chunkSug : suggestNoTimeout(chunk, checkCanceled)) {
+          for (String chunkSug : suggestWithTimeout(chunk, forkRoot, Long.MAX_VALUE, checkCanceled)) {
             String replaced = word.substring(0, chunkStart) + chunkSug + word.substring(chunkEnd);
             if (speller.spell(replaced)) {
               result.add(replaced);
