@@ -34,6 +34,7 @@ class ModifyingSuggester {
   private final boolean proceedPastRep;
   private final char[] tryChars;
   private final Hunspell speller;
+  private final boolean forkRoot;
 
   ModifyingSuggester(
       Hunspell speller,
@@ -41,7 +42,8 @@ class ModifyingSuggester {
       String misspelled,
       WordCase wordCase,
       FragmentChecker checker,
-      boolean proceedPastRep) {
+      boolean proceedPastRep,
+      boolean forkRoot) {
     this.speller = speller;
     tryChars = speller.dictionary.tryChars.toCharArray();
     this.result = result;
@@ -49,6 +51,7 @@ class ModifyingSuggester {
     this.wordCase = wordCase;
     fragmentChecker = checker;
     this.proceedPastRep = proceedPastRep;
+    this.forkRoot = forkRoot;
   }
 
   /**
@@ -63,7 +66,9 @@ class ModifyingSuggester {
 
     boolean hasGoodSuggestions = tryVariationsOf(misspelled);
 
-    if (wordCase == WordCase.TITLE) {
+    if (wordCase == WordCase.LOWER && forkRoot) {
+      hasGoodSuggestions |= tryVariationsOf(speller.dictionary.toTitleCase(misspelled));
+    } else if (wordCase == WordCase.TITLE) {
       hasGoodSuggestions |= tryVariationsOf(low);
     } else if (wordCase == WordCase.UPPER) {
       hasGoodSuggestions |= tryVariationsOf(low);

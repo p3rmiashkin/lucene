@@ -45,11 +45,13 @@ class GeneratingSuggester {
   private final Dictionary dictionary;
   private final Hunspell speller;
   private final SuggestibleEntryCache entryCache;
+  private final boolean forkRoot;
 
-  GeneratingSuggester(Hunspell speller, SuggestibleEntryCache entryCache) {
+  GeneratingSuggester(Hunspell speller, SuggestibleEntryCache entryCache, boolean forkRoot) {
     this.dictionary = speller.dictionary;
     this.speller = speller;
     this.entryCache = entryCache;
+    this.forkRoot = forkRoot;
   }
 
   List<String> suggest(String word, WordCase originalCase, Set<Suggestion> prevSuggestions) {
@@ -67,7 +69,8 @@ class GeneratingSuggester {
     FlagEnumerator.Lookup flagLookup = dictionary.flagLookup;
     IntPredicate isSuggestible = formId -> !flagLookup.hasAnyFlag(formId, excludeFlags);
 
-    boolean ignoreTitleCaseRoots = originalCase == WordCase.LOWER && !dictionary.hasLanguage("de");
+    boolean ignoreTitleCaseRoots =
+        originalCase == WordCase.LOWER && !forkRoot && !dictionary.hasLanguage("de");
     TrigramAutomaton automaton = new TrigramAutomaton(word);
 
     processSuggestibleWords(
